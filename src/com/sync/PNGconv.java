@@ -1,22 +1,36 @@
 /**
  * PNGconv - a "whatever Java can load, so not only PNG, to various Atari ST image formats converter"
  *
- * Needs recompiling between changing settings. Does not use the STE palette.
+ * Does not currently make use of the extended STE palette.
  *
- * Input:   .png, .gif, ...
+ * Input:   .png, .gif, .jpg, .bmp, ...
  * Output:  .pi1-compatible (ST low resolution)
  *          .pi2-compatible (ST medium resolution)
  *          .pi3-compatible (ST high resolution - untested)
  *          chunky (one word per pixel, 0x000-0x777 ST color range)
+ *          .png (reduced to ST 512 color palette bitdepth)
  *
- * Settings: (set at compile time)
- *          Color to be forced as background color (in bitmap mode)
- *          Number of bitplanes (1,2,4 - or 0 for chunky)
+ * Usage:
  *
- * If used in palette mode the program will output the number of unique colors found (used for building the palette).
- * No translation between image sizes or palette sizes is made - input image should be valid for the intended output use case.
+ * java -jar PNGconv.jar <input filename> <output filename> [mode] [bgcol]
+ *
+ * mode = "reduce"  - Converts input image from 8 bit per color channel to 3, outputs in .PNG
+ *      = "chunky"  - Converts input image from 8 bit per color channel to 3, outputs binary
+ *                    with one word per pixel. 0x000-0x777
+ *      = "high"    - Converts input image to ST Degas compatible 1 bitplane image (.pi3)
+ *      = "medium"  - Converts input image to ST Degas compatible 2 bitplane image (.pi2)
+ *      = "low"     - Converts input image to ST Degas compatible 4 bitplane image (.pi1)
+ *
+ * bgcol = Color to be forced as background color (in bitplane mode), in hexadecimal.
+ *         "fffff" = white, "000000" = black.
+ *
+ * If used in bitplane mode the program will output the number of unique colors found
+ * (used for building the palette). No translation between image sizes or palette sizes is made
+ * - input image should be valid for the intended output use case.
  *
  * Written by Troed of SYNC
+ *
+ * Licensed under Creative Commons Zero
  */
 
 package com.sync;
@@ -32,24 +46,59 @@ import java.util.List;
 
 public class PNGconv {
 
+    public static final int REDUCE_BITDEPTH = -1;
+    public static final int CHUNKY_WORD = 0;
+    public static final int ST_HIGH = 1;
+    public static final int ST_MEDIUM = 2;
+    public static final int ST_LOW = 4;
+
+    int mode = 0;
+    int bgcol = 0;
+
     List<Integer> palette = new ArrayList<Integer>();
 
     public static void main(String[] args) {
         if(args.length < 2) {
             System.out.println("Please supply input and output filenames as parameters");
         } else {
-            PNGconv conv = new PNGconv();
+            int mode = ST_LOW;  // defaults to ST low
+            int bgcol = 0xff000000; // defaults to black background color
+            if(args.length >= 3) {
+                if (args[2].equalsIgnoreCase("reduce")) {
+                    mode = REDUCE_BITDEPTH;
+                } else if (args[2].equalsIgnoreCase("chunky")) {
+                    mode = CHUNKY_WORD;
+                } else if (args[2].equalsIgnoreCase("high")) {
+                    mode = ST_HIGH;
+                } else if (args[2].equalsIgnoreCase("medium")) {
+                    mode = ST_MEDIUM;
+                } else if (args[2].equalsIgnoreCase("low")) {
+                    mode = ST_LOW;
+                }
+            }
+            if(args.length >= 4) {
+                try {
+                    bgcol |= Integer.parseInt(args[3], 16);  // parameter in hex, OR since we want to preserve alpha bits
+                } catch (NumberFormatException e) {
+                    System.out.println("Unable to parse " + args[3] + ". Continuing with defaults.");
+                }
+            }
+            PNGconv conv = new PNGconv(mode, bgcol);
             conv.conv(args[0], args[1]);
         }
+    }
+
+    public PNGconv(int mode, int bgcol) {
+        this.mode = mode;
+        this.bgcol = bgcol;
     }
 
     void conv(String inputfn, String outputfn) {
         // preload palette with the color that needs to be background color
         // not used in chunky mode
-//        palette.add(-1); // white
-        palette.add(-16777216); // black
+        palette.add(bgcol);
 
-        int noBitplanes = 0; // 4 & 2 tested, 1 (hires) might also work. Set to 0 for 16 bit chunky.
+        int noBitplanes = mode; // positive values for mode correspond to number of bitplanes
 
         BufferedImage img = null;
         try {
@@ -73,19 +122,22 @@ public class PNGconv {
 
         // chunky is RGB, 0x000 - 0x777, encoded as one word per pixel
 
-        char[] output;
+        char[] output = null;
         if(noBitplanes > 0) {
             output = new char[(x * y / 16) * noBitplanes];
-        } else {
+        } else if (mode == CHUNKY_WORD) {
             output = new char[x * y];   // one word per pixel
-        }
+        } // else, not used when outputting .png image
 
         int addrc = 0;
         int currbit = 0;
         for(int j=0;j<y;j++) {
             for(int i=0;i<x;i++) {
                 int pixel = img.getRGB(i, j);
-                if(noBitplanes == 0) {
+                if(mode == REDUCE_BITDEPTH) {
+                    img.setRGB(i,j,(pixel & 0xffe0e0e0)); // AND color channels with 0xe0 to go to 3 bit color depth
+//                    System.out.print(".");
+                } else if(mode == CHUNKY_WORD) {
                     output[addrc] = chunky(pixel);
                     System.out.print(".");
                     addrc++;
@@ -120,38 +172,48 @@ public class PNGconv {
             headerlength = 34; // degas header length, always 16 colors for palette regardless of resolution
         }
 
-        ByteBuffer buffer = ByteBuffer.allocate(output.length * 2 + headerlength);
-
-        if(noBitplanes > 0) {
-            if(noBitplanes == 1) {
-                buffer.putChar((char)0x2); // high res
-            } else if(noBitplanes == 2) {
-                buffer.putChar((char)0x1); // med res
-            } else if(noBitplanes == 4) {
-                buffer.putChar((char)0x0); // low res
+        if(mode == REDUCE_BITDEPTH) {
+            File f = new File(outputfn);
+            try {
+                ImageIO.write(img, "PNG", f);
+                System.out.println(outputfn + " saved.");
+            } catch (IOException e) {
+                System.out.println("Error writing file");
             }
-            System.out.println(palette.size() + " unique colors found.");
-            for (int i = 0; i < 16; i++) {     // degas palette always 16 colors, also in med res.
-                int pal;
-                if(i < palette.size()) {
-                    pal = palette.get(i);
-                } else {
-                    pal = -1;
+        } else {
+            ByteBuffer buffer = ByteBuffer.allocate(output.length * 2 + headerlength);
+
+            if (noBitplanes > 0) {
+                if (noBitplanes == ST_HIGH) {
+                    buffer.putChar((char) 0x2); // high res
+                } else if (noBitplanes == ST_MEDIUM) {
+                    buffer.putChar((char) 0x1); // med res
+                } else if (noBitplanes == ST_LOW) {
+                    buffer.putChar((char) 0x0); // low res
                 }
-                buffer.putChar(chunky(pal));
+                System.out.println(palette.size() + " unique colors found.");
+                for (int i = 0; i < 16; i++) {     // degas palette always 16 colors, also in med res.
+                    int pal;
+                    if (i < palette.size()) {
+                        pal = palette.get(i);
+                    } else {
+                        pal = -1;
+                    }
+                    buffer.putChar(chunky(pal));
+                }
             }
-        }
 
-        for(int i=0;i<output.length;i++) {
-            buffer.putChar(output[i]);
-        }
+            for (int i = 0; i < output.length; i++) {
+                buffer.putChar(output[i]);
+            }
 
-        try {
-            FileOutputStream fos = new FileOutputStream(outputfn);
-            fos.write(buffer.array());
-            System.out.println(outputfn + " saved.");
-        } catch (IOException e) {
-            System.out.println("Error writing file");
+            try {
+                FileOutputStream fos = new FileOutputStream(outputfn);
+                fos.write(buffer.array());
+                System.out.println(outputfn + " saved.");
+            } catch (IOException e) {
+                System.out.println("Error writing file");
+            }
         }
     }
 
