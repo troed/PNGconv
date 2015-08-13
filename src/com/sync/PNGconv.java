@@ -124,7 +124,7 @@ public class PNGconv {
 
         char[] output = null;
         if(noBitplanes > 0) {
-            output = new char[(x * y / 16) * noBitplanes];
+            output = new char[(int) (Math.ceil((double)(x * y) / (double)16)) * noBitplanes]; // Make sure we round upwards
         } else if (mode == CHUNKY_WORD) {
             output = new char[x * y];   // one word per pixel
         } // else, not used when outputting .png image
@@ -166,12 +166,6 @@ public class PNGconv {
 
         System.out.println("");
 
-        int headerlength = 0;
-
-        if(noBitplanes > 0) {
-            headerlength = 34; // degas header length, always 16 colors for palette regardless of resolution
-        }
-
         if(mode == REDUCE_BITDEPTH) {
             File f = new File(outputfn);
             try {
@@ -181,6 +175,12 @@ public class PNGconv {
                 System.out.println("Error writing file");
             }
         } else {
+            int headerlength = 0;
+
+            if(noBitplanes > 0) {
+                headerlength = 34; // degas header length, always 16 colors for palette regardless of resolution
+            }
+
             ByteBuffer buffer = ByteBuffer.allocate(output.length * 2 + headerlength);
 
             if (noBitplanes > 0) {
