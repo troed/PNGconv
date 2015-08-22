@@ -12,17 +12,13 @@
 
 package com.sync;
 
-import com.sun.org.apache.xerces.internal.xs.StringList;
-
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 public class PNGconv {
 
@@ -51,27 +47,34 @@ public class PNGconv {
 
     public static void main(String[] args) {
         if(args.length < 2) {
-            System.out.println("Please supply at least input and output filenames as parameters");
+            System.out.println("");
+            System.out.println("Usage: java -jar PNGconv.jar <input filename> <output filename> [mode] [-option1] [-option2] [-option...]");
+            System.out.println("");
+            System.out.println("See https://github.com/troed/PNGconv/blob/master/README.md for full list of parameters.");
+            System.out.println("");
         } else {
-            List<String> parameters = new ArrayList<String>(){};
-            for(String s : args) {
-                parameters.add(s.toLowerCase());
+            List<String> parameters = new ArrayList<String>();
+            for(int i=2; i<args.length; i++) {
+                // we don't want duplicates, yet we want to be able to use get(pos+1) so Set:s are no good
+                String s = args[i].toLowerCase();
+                if(!parameters.contains(s)) {
+                    parameters.add(s);
+                }
             }
 
             int mode = ST_LOW;  // defaults to ST low
 
-            if(parameters.size() >= 3) {
-                if (parameters.get(2).equals("reduce")) {
-                    mode = REDUCE_BITDEPTH;
-                } else if (parameters.get(2).equals("chunky")) {
-                    mode = CHUNKY_WORD;
-                } else if (parameters.get(2).equals("high")) {
-                    mode = ST_HIGH;
-                } else if (parameters.get(2).equals("medium")) {
-                    mode = ST_MEDIUM;
-                } else if (parameters.get(2).equals("low")) {
-                    mode = ST_LOW;
-                }
+            // we always test for presence using .remove - to be able to tell the user of unknown parameters at the end
+            if (parameters.remove("reduce")) {
+                mode = REDUCE_BITDEPTH;
+            } else if (parameters.remove("chunky")) {
+                mode = CHUNKY_WORD;
+            } else if (parameters.remove("high")) {
+                mode = ST_HIGH;
+            } else if (parameters.remove("medium")) {
+                mode = ST_MEDIUM;
+            } else if (parameters.remove("low")) {
+                mode = ST_LOW;
             }
 
             PNGconv conv = new PNGconv(mode);
@@ -83,34 +86,40 @@ public class PNGconv {
                     bgcol = (char)Integer.parseInt(parameters.get(pos + 1), 16);  // parameter in hex
                 } catch (NumberFormatException e) {
                     System.out.println("Unable to parse \"" + parameters.get(pos + 1) + "\" as parameter to -bgcol. Continuing with default value.");
+                    parameters.remove(pos+1);
                 } catch (Exception e) {
                     System.out.println("Unable to find color parameter for -bgcol option");
                 }
+                parameters.remove(pos);
                 conv.setBgcol(bgcol);
             }
 
-            if(parameters.contains("-512")) {
+            if(parameters.remove("-512")) {
                 conv.setColdepth(ST_BITDEPTH);
-            } else if(parameters.contains("-4096")) {
+            } else if(parameters.remove("-4096")) {
                 conv.setColdepth(AMIGA_BITDEPTH);
-            } else if(parameters.contains("-4096ste")) {
+            } else if(parameters.remove("-4096ste")) {
                 conv.setColdepth(STE_BITDEPTH);
             }
 
-            if(parameters.contains("-header")) {
+            if(parameters.remove("-header")) {
                 conv.setHeader(true);
             }
 
-            if(parameters.contains("-fit")) {
+            if(parameters.remove("-fit")) {
                 conv.setFit(true);
             }
 
-            if(parameters.contains("-acbm")) {
+            if(parameters.remove("-acbm")) {
                 conv.setPlanarStructure(PLANAR_ACBM);
-            } else if(parameters.contains("-ilbm")) {
+            } else if(parameters.remove("-ilbm")) {
                 conv.setPlanarStructure(PLANAR_ILBM);
             } // else default ST
 
+            // any parameters still left are unknown to us
+            if(!parameters.isEmpty()) {
+                System.out.println("Unknown arguments: " + parameters.toString());
+            }
 
             conv.conv(args[0], args[1]);
         }
