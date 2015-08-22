@@ -3,40 +3,6 @@
  *              to various image formats, so not only Atari ST,
  *              converter"
  *
- * Input:   .png, .gif, .jpg, .bmp, ...
- * Output:  .pi1-compatible (ST low resolution)
- *          .pi2-compatible (ST medium resolution)
- *          .pi3-compatible (ST high resolution - untested)
- *          chunky (one word per pixel, 0x000-0x777/0xfff ST/STE/Amiga color range)
- *          .png (reduced to 3 or 4 color bitdepth)
- *          ... and more
- *
- * Usage:
- *
- * java -jar PNGconv.jar <input filename> <output filename> [mode] [-option1] [-option2] [-option...]
- *
- * mode = "reduce"  - Converts input image from 8 bit per color channel to 3 or 4, outputs in .PNG
- *      = "chunky"  - Converts input image from 8 bit per color channel to 3 or 4, outputs binary
- *                    with one word per pixel: 0x000-0x777 or 0x000-0xfff.
- *      = "high"    - Converts input image to ST Degas compatible 1 bitplane image (.pi3)
- *      = "medium"  - Converts input image to ST Degas compatible 2 bitplane image (.pi2)
- *      = "low"     - Converts input image to ST Degas compatible 4 bitplane image (.pi1, default)
- *
- * options:
- *
- * -fit         = Calculates number of bitplanes needed for palette in input and uses only those. Might be 3, 5 etc!
- * -ACBM        = Outputs Amiga continuous bitplane format, one full image bitplane after another
- * -ILBM        = Outputs Amiga interleaved bitplane format, one image row of bitplane after another
- * -header      = Adds header with palette to output (in 1,2 and 4 bitplane modes the header will be Atari Degas compatible)
- * -512         = Use ST color depth (3 bits per color channel, default)
- * -4096        = Use Amiga color depth (4 bits per color channel, bit order 4321)
- * -4096STE     = Use STE color depth (4 bits per color channel, bit order 1432)
- * -bgcol xyz   = Force first palette entry (background color) to be "xyz" (in target bit depth hexadecimal, 000 = black)
- *
- * If used in bitplane mode the program will output the number of unique colors found
- * (used for building the palette). No translation between image sizes or palette sizes is made
- * - input image should be valid for the intended output use case.
- *
  * Written by Troed of SYNC
  *
  * Licensed under Creative Commons Zero
@@ -75,7 +41,6 @@ public class PNGconv {
     static final int PLANAR_ILBM = 2;
 
     int mode = 0;
-    char bgcol = 0;
 
     int coldepth = ST_BITDEPTH;
     boolean header = false;
@@ -115,7 +80,7 @@ public class PNGconv {
                 char bgcol = 0x0000; // defaults to black background color
                 int pos = parameters.indexOf("-bgcol");
                 try {
-                    bgcol |= Integer.parseInt(parameters.get(pos + 1), 16);  // parameter in hex
+                    bgcol = (char)Integer.parseInt(parameters.get(pos + 1), 16);  // parameter in hex
                 } catch (NumberFormatException e) {
                     System.out.println("Unable to parse \"" + parameters.get(pos + 1) + "\" as parameter to -bgcol. Continuing with default value.");
                 } catch (Exception e) {
@@ -172,13 +137,12 @@ public class PNGconv {
     }
 
     void setBgcol(char bgcol) {
-        this.bgcol = bgcol;
+        // preload palette with the color that needs to be background color
+        // is not used in chunky modes
+        palette.add(bgcol);
     }
 
     void conv(String inputfn, String outputfn) {
-        // preload palette with the color that needs to be background color
-        // not used in chunky mode
-        palette.add(bgcol);
 
         BufferedImage img = null;
         try {
@@ -215,8 +179,9 @@ public class PNGconv {
         char[] output = null;
         int bitplaneRowSize = 0;   // only used in bitmap modes
         if (noBitplanes > 0) {
-            bitplaneRowSize = (int) (Math.ceil((double) x / (double) 16)); // size of one bitplane
-            output = new char[bitplaneRowSize * noBitplanes * y]; // Make sure we round upwards
+            // Make sure we round upwards
+            bitplaneRowSize = (int) (Math.ceil((double) x / (double) 16)); // size of one bitplane row
+            output = new char[bitplaneRowSize * noBitplanes * y];
         } else if (mode == CHUNKY_WORD) {
             output = new char[x * y];   // one word per pixel
         } // else, not used when outputting .png image
@@ -300,13 +265,15 @@ public class PNGconv {
         } else {
             int headerlength = 0;
 
-            if (noBitplanes == ST_HIGH || noBitplanes == ST_MEDIUM || noBitplanes == ST_LOW) {
-                headerlength = 17; // degas header length, always 16 colors for palette regardless of resolution
-            } else {
-//                    headerlength = palette.size();
-                // Maybe it's more natural for the palette to fully represent the bitplanes instead
-                // of just the number of used entries
-                headerlength = (int)Math.pow(2, noBitplanes);
+            if (header) {
+                if (noBitplanes == ST_HIGH || noBitplanes == ST_MEDIUM || noBitplanes == ST_LOW) {
+                    headerlength = 17; // degas header length in words, always 16 colors for palette regardless of resolution
+                } else {
+                    // Maybe it's more natural for the palette to fully represent the bitplanes instead
+                    // of just the number of used entries
+                    // headerlength = palette.size();
+                    headerlength = 1 << noBitplanes;
+                }
             }
 
             ByteBuffer buffer = ByteBuffer.allocate((output.length + headerlength) * 2);
@@ -330,7 +297,7 @@ public class PNGconv {
                     if (i < palette.size()) {
                         pal = palette.get(i);
                     } else {
-                        pal = 0;
+                        pal = 0;                // unused palette entries will be black
                     }
                     buffer.putChar(pal);
                 }
@@ -351,7 +318,7 @@ public class PNGconv {
     }
 
     // palette lookup, uses intended output bitdepth values for storage
-    // (else we might create palette indexes for colors that will truncate to become the same)
+    // (else we might create palette indexes for colors that will later truncate to become the same)
     // if a color isn't already in the palette, it's added
 
     int lookup(int pixel) {
@@ -365,7 +332,7 @@ public class PNGconv {
     }
 
     // translates from Java pixel values to Atari ST 0xRGB (0x000-0x777), Amiga RGB (0x000-0xfff)
-    // or Atari STE RGB (0x000-0xfff, where bit 4 is lowest bit to be otherwise compatible with ST)
+    // or Atari STE RGB (0x000-0xfff, where bit 4 is the lowest bit to be otherwise compatible with ST)
 
     char chunky(int value) {
         int R = (value >> 16) & 0xff;
@@ -373,17 +340,20 @@ public class PNGconv {
         int B = (value) & 0xff;
 
         if(coldepth == ST_BITDEPTH) {
-            R = R >> 5; // go from 8 bit per color to 3
-            G = G >> 5; // go from 8 bit per color to 3
-            B = B >> 5; // go from 8 bit per color to 3
+            // go from 8 bit per color to 3
+            R = R >> 5;
+            G = G >> 5;
+            B = B >> 5;
         } else if (coldepth == AMIGA_BITDEPTH) {
-            R = R >> 4; // go from 8 bit per color to 4
-            G = G >> 4; // go from 8 bit per color to 4
-            B = B >> 4; // go from 8 bit per color to 4
+            // go from 8 bit per color to 4
+            R = R >> 4;
+            G = G >> 4;
+            B = B >> 4;
         } else if (coldepth == STE_BITDEPTH) {
-            R = R >> 4; // go from 8 bit per color to 4
-            G = G >> 4; // go from 8 bit per color to 4
-            B = B >> 4; // go from 8 bit per color to 4
+            // go from 8 bit per color to 4
+            R = R >> 4;
+            G = G >> 4;
+            B = B >> 4;
             // rotate nibble (4321 -> 1432)
             int lowbit = (R & 0x1) << 3;
             R = (R >> 1) | lowbit;

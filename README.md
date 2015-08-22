@@ -17,9 +17,9 @@
     mode = "reduce"  - Converts input image from 8 bit per color channel to 3 or 4, outputs in .PNG
          = "chunky"  - Converts input image from 8 bit per color channel to 3 or 4, outputs binary
                        with one word per pixel: 0x000-0x777 or 0x000-0xfff.
-         = "high"    - Converts input image to ST Degas compatible 1 bitplane image (.pi3)
-         = "medium"  - Converts input image to ST Degas compatible 2 bitplane image (.pi2)
-         = "low"     - Converts input image to ST Degas compatible 4 bitplane image (.pi1, default)
+         = "high"    - Converts input image to ST high resolution
+         = "medium"  - Converts input image to ST medium resolution
+         = "low"     - Converts input image to ST low resolution
 
     options:
 
