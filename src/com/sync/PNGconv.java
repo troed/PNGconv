@@ -82,13 +82,20 @@ public class PNGconv {
             if(parameters.contains("-bgcol")) {
                 char bgcol = 0x0000; // defaults to black background color
                 int pos = parameters.indexOf("-bgcol");
+                String value = null;
                 try {
-                    bgcol = (char)Integer.parseInt(parameters.get(pos + 1), 16);  // parameter in hex
-                } catch (NumberFormatException e) {
-                    System.out.println("Unable to parse \"" + parameters.get(pos + 1) + "\" as parameter to -bgcol. Continuing with default value.");
-                    parameters.remove(pos+1);
+                    value = parameters.get(pos + 1);
                 } catch (Exception e) {
                     System.out.println("Unable to find color parameter for -bgcol option");
+                }
+                if(value != null) {
+                    try {
+                        bgcol = (char) Integer.parseInt(parameters.get(pos + 1), 16);  // parameter in hex
+                    } catch (NumberFormatException e) {
+                        System.out.println("Unable to parse \"" + parameters.get(pos + 1) + "\" as parameter to -bgcol. Continuing with default value.");
+                    } finally {
+                        parameters.remove(pos + 1);
+                    }
                 }
                 parameters.remove(pos);
                 conv.setBgcol(bgcol);
