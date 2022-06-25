@@ -1,3 +1,5 @@
+#!/usr/bin/env -S java --source 11
+
 /**
  * PNGconv - a "whatever Java can load, so not only PNG,
  *              to various image formats, so not only Atari ST,
@@ -22,6 +24,7 @@ import java.util.*;
 
 public class PNGconv {
 
+    static final int CHUNKY_BYTE = -2;
     static final int REDUCE_BITDEPTH = -1;
     static final int CHUNKY_WORD = 0;
     static final int ST_HIGH = 1;
@@ -35,12 +38,14 @@ public class PNGconv {
     static final int PLANAR_ST = 0;
     static final int PLANAR_ACBM = 1;
     static final int PLANAR_ILBM = 2;
+    static final int PLANAR_ST_FPGA = 3;
 
     int mode = 0;
 
     int coldepth = ST_BITDEPTH;
     boolean header = false;
     boolean fit = false;
+    boolean verbose = false;
     int planarstructure = PLANAR_ST;
 
     List<Character> palette = new ArrayList<Character>();
@@ -69,6 +74,8 @@ public class PNGconv {
                 mode = REDUCE_BITDEPTH;
             } else if (parameters.remove("chunky")) {
                 mode = CHUNKY_WORD;
+            } else if (parameters.remove("chunky8")) {
+                mode = CHUNKY_BYTE;
             } else if (parameters.remove("high")) {
                 mode = ST_HIGH;
             } else if (parameters.remove("medium")) {
@@ -121,7 +128,13 @@ public class PNGconv {
                 conv.setPlanarStructure(PLANAR_ACBM);
             } else if(parameters.remove("-ilbm")) {
                 conv.setPlanarStructure(PLANAR_ILBM);
+            } else if(parameters.remove("-fpga")) {
+                conv.setPlanarStructure(PLANAR_ST_FPGA);
             } // else default ST
+
+            if(parameters.remove("-v")) {
+                conv.setVerbose(true);
+            }
 
             // any parameters still left are unknown to us
             if(!parameters.isEmpty()) {
@@ -148,6 +161,10 @@ public class PNGconv {
         this.fit = fit;
     }
 
+    void setVerbose(boolean verbose) {
+        this.verbose = verbose;
+    }
+
     void setPlanarStructure(int planarstructure) {
         this.planarstructure = planarstructure;
     }
@@ -171,6 +188,10 @@ public class PNGconv {
 
         int x = img.getWidth();
         int y = img.getHeight();
+
+        if (verbose) {
+            System.out.println("Width: " + x + " Height: " + y);
+        }
 
         int noBitplanes = 1;
 
@@ -197,14 +218,26 @@ public class PNGconv {
         if (noBitplanes > 0) {
             // Make sure we round upwards
             bitplaneRowSize = (int) (Math.ceil((double) x / (double) 16)); // size of one bitplane row
-            output = new char[bitplaneRowSize * noBitplanes * y];
+            if (verbose) {
+                System.out.println("Bitplane row size: " + bitplaneRowSize);
+            }
+            if (planarstructure == PLANAR_ST_FPGA) {
+                output = new char[bitplaneRowSize * noBitplanes * y * 2];
+            } else {
+                output = new char[bitplaneRowSize * noBitplanes * y];
+            }
         } else if (mode == CHUNKY_WORD) {
             output = new char[x * y];   // one word per pixel
+        } else if (mode == CHUNKY_BYTE) {
+            output = new char[x * y / 2];   // one byte per pixel
         } // else, not used when outputting .png image
 
         int addrc = 0;
         int currbit = 0;
         for (int j = 0; j < y; j++) {
+            if(verbose) {
+                System.out.println("Line: " + j);
+            }
             for (int i = 0; i < x; i++) {
                 int pixel = img.getRGB(i, j);
                 if (mode == REDUCE_BITDEPTH) {
@@ -219,6 +252,20 @@ public class PNGconv {
 
                     output[addrc] = chunky(pixel);
                     addrc++;
+                } else if (mode == CHUNKY_BYTE) {
+                    // chunky byte is palette based, 256 entry palette, one byte per palette lookup
+                    int palette = lookup(pixel);
+                    if(palette > 255) {
+                        System.out.println("Too many colors in input image! Max palette in chunky byte mode is 256");
+                    }
+                    if(currbit == 0) {
+                        output[addrc] = (char) ((palette & 0xff) << 8);
+                        currbit = 8;
+                    } else {
+                        output[addrc] |= (char) (palette & 0xff);
+                        currbit = 0;
+                        addrc++;
+                    }
                 } else {
                     int palette = lookup(pixel);
                     for (int n = 0; n < noBitplanes; n++) {
@@ -234,6 +281,19 @@ public class PNGconv {
                             output[addrc + n] = (char) (output[addrc + n] << 1);
                             output[addrc + n] |= (char) ((palette >> n) & 0x1);
 
+                        } else if (planarstructure == PLANAR_ST_FPGA) {
+
+                            // FPGA-Shifter 8 bitplane mode uses four words for 8 pixels
+                            // %001122334455667788
+                            // %001122334455667788
+                            // %001122334455667788
+                            // %001122334455667788
+
+                            // Where %00000000 is our eight bit pixel palette lookup value
+
+                            output[addrc + n] = (char) (output[addrc + n] << 2);
+                            output[addrc + n] |= (char) ((palette >> n) & 0x3);
+
                         } else if (planarstructure == PLANAR_ACBM) {
                             // each bitplane in full after one another
 
@@ -248,11 +308,18 @@ public class PNGconv {
 
                         }
                     }
-                    currbit += 1;
+                    if (planarstructure == PLANAR_ST_FPGA) {
+                        currbit += 2;           // this mode uses two bits per pixel in each bitplane
+                    } else {
+                        currbit += 1;
+                    }
                     if (currbit == 16) {        // current bitplane words filled, move on to next
+                        if(verbose) {
+                            System.out.println("Bitplane word complete");
+                        }
                         currbit = 0;
 
-                        if (planarstructure == PLANAR_ST) {
+                        if (planarstructure == PLANAR_ST || planarstructure == PLANAR_ST_FPGA) {
                             addrc += noBitplanes;
                         } else if (planarstructure == PLANAR_ACBM) {
                             addrc++;
@@ -282,26 +349,33 @@ public class PNGconv {
             int headerlength = 0;
 
             if (header) {
-                if (noBitplanes == ST_HIGH || noBitplanes == ST_MEDIUM || noBitplanes == ST_LOW) {
+                if (planarstructure == PLANAR_ST && (noBitplanes == ST_HIGH || noBitplanes == ST_MEDIUM || noBitplanes == ST_LOW)) {
                     headerlength = 17; // degas header length in words, always 16 colors for palette regardless of resolution
                 } else {
                     // Maybe it's more natural for the palette to fully represent the bitplanes instead
                     // of just the number of used entries
                     // headerlength = palette.size();
-                    headerlength = 1 << noBitplanes;
+                    if(planarstructure == PLANAR_ST_FPGA) {
+                        headerlength = 1 << (noBitplanes * 2); // due to the hacky way we encode 8 bitplanes for the FPGA solution
+                    }
+                    else if(mode == CHUNKY_BYTE) {
+                        headerlength = 1 << 8;
+                    } else {
+                        headerlength = 1 << noBitplanes;
+                    }
                 }
             }
 
             ByteBuffer buffer = ByteBuffer.allocate((output.length + headerlength) * 2);
 
             if (header) {
-                if (noBitplanes == ST_HIGH) {
+                if (planarstructure == PLANAR_ST && noBitplanes == ST_HIGH) {
                     buffer.putChar((char) 0x2); // high res
                     headerlength--;
-                } else if (noBitplanes == ST_MEDIUM) {
+                } else if (planarstructure == PLANAR_ST && noBitplanes == ST_MEDIUM) {
                     buffer.putChar((char) 0x1); // med res
                     headerlength--;
-                } else if (noBitplanes == ST_LOW) {
+                } else if (planarstructure == PLANAR_ST && noBitplanes == ST_LOW) {
                     buffer.putChar((char) 0x0); // low res
                     headerlength--;
                 }

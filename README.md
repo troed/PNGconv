@@ -12,7 +12,9 @@
 
     Usage:
 
-    java -jar PNGconv.jar <input filename> <output filename> [mode] [-option1] [-option2] [-option...]
+    Download, make executable using "chmod +x PNGconv", move it to a suitable folder in your PATH. Run:
+
+    PNGconv <input filename> <output filename> [mode] [-option1] [-option2] [-option...]
 
     mode = "reduce"  - Converts input image from 8 bit per color channel to 3 or 4, outputs in .PNG
          = "chunky"  - Converts input image from 8 bit per color channel to 3 or 4, outputs binary
